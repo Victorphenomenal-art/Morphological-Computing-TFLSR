@@ -1,0 +1,6 @@
+Pi_Names,Values,Descriptions
+Pi_1 (Duffing),4,Hyperelastic restoring force multiplier
+Pi_2_slip (Slide Damping),0.08,Viscous kinetic resistance during expansion
+Pi_2_stick (Static Clamping),65,Coulomb static friction during contraction
+Pi_stride (Propulsion),2.72,Rectified volume-expansion gain
+Pi_4 (Deborah Fluid),0.95,Fluid-dynamic capacitance lag

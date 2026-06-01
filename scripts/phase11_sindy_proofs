@@ -1,0 +1,99 @@
+import numpy as np
+import pysindy as ps
+import scipy.io as sio
+import matplotlib.pyplot as plt
+import os
+
+print("--- PHASE 11: APPENDIX D SINDY PROOFS ---")
+
+# =========================================================================
+# 1. LOAD DATA WITH DYNAMIC ROUTING
+# =========================================================================
+data_path = os.path.join(os.path.dirname(__file__), '..', 'models', 'TFLSR_Synthetic_Data.mat')
+mat_base = sio.loadmat(data_path, squeeze_me=True)
+t = mat_base['time_data']
+dt = t[1] - t[0]
+
+# Extract z-translation
+if mat_base['translation_data'].shape[0] == 3:
+    z_raw = mat_base['translation_data'][2, :] 
+else:
+    z_raw = mat_base['translation_data'][:, 2]
+
+# Calculate true derivatives
+v_raw = np.gradient(z_raw, dt)
+a_raw = np.gradient(v_raw, dt)
+
+# =========================================================================
+# PROOF D2: PRE-STRAIN REMOVAL
+# =========================================================================
+print("\n>> Executing Proof D2: Pre-Strain Paradox...")
+
+# Remove the static gravitational sag (mean offset)
+z_centered = z_raw - np.mean(z_raw)
+X_centered = np.stack((z_centered, v_raw), axis=-1)
+
+poly_lib = ps.PolynomialLibrary(degree=3)
+model_centered = ps.SINDy(feature_library=poly_lib)
+model_centered.fit(X_centered, t=dt)
+
+print("SINDy Equation after Pre-Strain Removal (Quadratic terms should vanish):")
+model_centered.print()
+
+# =========================================================================
+# PROOF D3: CUSTOM NON-SMOOTH LIBRARY (MECHANICAL DIODE)
+# =========================================================================
+print("\n>> Executing Proof D3: Non-Smooth Stick-Slip Basis...")
+
+# 1. Synthesize the missing driving pressure based on the known 4.39 Hz input
+omega = 2 * np.pi * 4.39
+u_signal = (np.sin(omega * t) >= 0).astype(float)
+
+# Simulate dimensionless pressure (P) using p4 = 0.95
+P_sim = np.zeros_like(t)
+for i in range(1, len(t)):
+    P_sim[i] = P_sim[i-1] + ((-P_sim[i-1] + u_signal[i-1]) / 0.95) * dt
+P_dot = np.gradient(P_sim, dt)
+
+# 2. Engineer the Mechanical Diode features
+P_dot_pos = np.maximum(0, P_dot)  # Expansion Rectifier
+P_dot_neg = np.minimum(0, P_dot)  # Stick Damper
+
+# 3. Stack features: [velocity, max(0, P_dot), min(0, P_dot)]
+X_features = np.stack((v_raw, P_dot_pos, P_dot_neg), axis=-1)
+
+# 4. Fit SINDy explicitly to the acceleration (a_raw) using a linear combination
+lib = ps.PolynomialLibrary(degree=1, include_bias=False)
+opt = ps.STLSQ(threshold=0.1)
+model_custom = ps.SINDy(feature_library=lib, optimizer=opt)
+
+# By passing x_dot, we force SINDy to map X_features strictly to acceleration
+model_custom.fit(X_features, x_dot=a_raw.reshape(-1, 1), t=dt)
+
+print("\nSINDy Equation with Non-Smooth Basis:")
+print("(x0 = velocity | x1 = max(0, P_dot) | x2 = min(0, P_dot))")
+model_custom.print()
+
+# Predict the acceleration using the new model
+a_pred = model_custom.predict(X_features)
+
+# =========================================================================
+# PLOTTING AND EXPORTING
+# =========================================================================
+print("\n>> Generating Plot...")
+plt.figure(figsize=(10, 5))
+plt.plot(t, a_raw, color='#00A6A6', linewidth=1.5, label="True Simscape Acceleration")
+plt.plot(t, a_pred, 'w--', linewidth=2, label="Custom Non-Smooth SINDy Prediction")
+plt.style.use('dark_background')
+plt.xlabel("Time (s)")
+plt.ylabel("Acceleration")
+plt.title("Appendix D3: Persistence of the Kinetic Stiffness Limit with Custom Non-Smooth Basis")
+plt.legend(loc="lower right")
+plt.grid(True, alpha=0.3)
+
+# Export
+output_dir = os.path.join(os.path.dirname(__file__), '..', 'results', 'figures')
+os.makedirs(output_dir, exist_ok=True)
+plt.savefig(os.path.join(output_dir, 'Appendix_D3_CustomSINDy.pdf'), format='pdf', bbox_inches='tight')
+plt.savefig(os.path.join(output_dir, 'Appendix_D3_CustomSINDy.png'), dpi=300, bbox_inches='tight')
+print(f"\nAppendix D3 successfully exported to: {os.path.abspath(output_dir)}")

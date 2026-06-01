@@ -1,0 +1,116 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import pysindy as ps
+import os
+
+# Ensure the output directory exists
+os.makedirs('results/figures', exist_ok=True)
+
+# ---------------------------------------------------------
+# 1. Load the Exact Stick-Slip Data from MATLAB
+# ---------------------------------------------------------
+print("Loading Phase 12 Stick-Slip Data...")
+df = pd.read_csv('results/data/Phase12_StickSlipData.csv', header=None)
+
+# Columns mapping based on MATLAB output: [Time, X_payload, V_payload, X_foot, V_foot]
+t = df[0].values
+X_p = df[1].values
+V_p = df[2].values
+X_f = df[3].values
+V_f = df[4].values
+
+# FIX: Remove duplicate timestamps caused by MATLAB ode45 event triggers
+_, unique_indices = np.unique(t, return_index=True)
+t = t[unique_indices]
+X_p = X_p[unique_indices]
+V_p = V_p[unique_indices]
+X_f = X_f[unique_indices]
+V_f = V_f[unique_indices]
+
+# ---------------------------------------------------------
+# 2. Reconstruct the System State & Control Inputs
+# ---------------------------------------------------------
+# SINDy needs the state matrix X = [Position, Velocity]
+X_train = np.stack((X_p, V_p), axis=-1)
+
+# Recreate the exact 1 Hz thermodynamic pressure wave used in MATLAB
+Pmax = 120000
+freq = 1
+P_val = Pmax * np.maximum(0, np.sin(2 * np.pi * freq * t))
+
+# Provide the pressure and the internal stretch (z) as control inputs (u)
+z = X_p - X_f
+u_train = np.stack((P_val, z), axis=-1)
+
+# Calculate the True Acceleration (Derivative of Velocity)
+fd = ps.FiniteDifference()
+X_dot_true = fd._differentiate(X_train, t=t)
+accel_true = X_dot_true[:, 1]
+# ---------------------------------------------------------
+# 3. Model A: Standard Polynomial Basis (Fails)
+# ---------------------------------------------------------
+print("Fitting Standard Polynomial SINDy Model...")
+poly_library = ps.PolynomialLibrary(degree=3, include_bias=True)
+optimizer = ps.STLSQ(threshold=0.1, alpha=0.05)
+
+model_poly = ps.SINDy(feature_library=poly_library, optimizer=optimizer)
+model_poly.fit(X_train, t=t, u=u_train)
+
+X_dot_poly = model_poly.predict(X_train, u=u_train)
+accel_poly = X_dot_poly[:, 1]
+
+# ---------------------------------------------------------
+# 4. Model B: Custom Mechanical Diode Basis (Still Fails)
+# ---------------------------------------------------------
+print("Fitting Custom Non-Smooth SINDy Model...")
+# We explicitly give SINDy the non-smooth physics functions
+custom_functions = [
+    lambda x: x,
+    lambda x: x**2,
+    lambda x: x**3,
+    lambda x: np.maximum(0, x),  # Mechanical Diode / Rectification
+    lambda x: np.sign(x)         # Coulomb Friction switching
+]
+custom_names = [
+    lambda x: x,
+    lambda x: x + '^2',
+    lambda x: x + '^3',
+    lambda x: 'max(0, ' + x + ')',
+    lambda x: 'sign(' + x + ')'
+]
+
+custom_library = ps.CustomLibrary(library_functions=custom_functions, function_names=custom_names)
+tensor_library = ps.GeneralizedLibrary([poly_library, custom_library])
+
+model_custom = ps.SINDy(feature_library=tensor_library, optimizer=optimizer)
+model_custom.fit(X_train, t=t, u=u_train)
+
+X_dot_custom = model_custom.predict(X_train, u=u_train)
+accel_custom = X_dot_custom[:, 1]
+
+# ---------------------------------------------------------
+# 5. Plotting the "SINDy Stiffness Limit"
+# ---------------------------------------------------------
+plt.style.use('dark_background')
+fig, ax = plt.subplots(figsize=(10, 5))
+
+# Plot True Acceleration (The Spikes)
+ax.plot(t, accel_true, color='#00b4d8', linewidth=1.5, label='True Stick-Slip Acceleration')
+
+# Plot Custom Basis Prediction (The Flat Line)
+ax.plot(t, accel_custom, color='white', linestyle='--', linewidth=2, label='Custom Non-Smooth SINDy Prediction')
+
+ax.set_title('Appendix D3: Failure of Non-Smooth Basis Recovery', fontsize=14, color='white')
+ax.set_xlabel('Time (s)', fontsize=12)
+ax.set_ylabel('Acceleration (m/s²)', fontsize=12)
+ax.grid(True, color='#333333', linestyle='-', alpha=0.5)
+ax.legend(loc='lower right', fontsize=11, facecolor='black', edgecolor='white')
+
+plt.tight_layout()
+
+# Save the final vector graphic for the IEEE Supplementary Material
+plt.savefig('results/figures/Fig_Appendix_D3_SINDyFailure.pdf', format='pdf')
+plt.savefig('results/figures/Fig_Appendix_D3_SINDyFailure.png', dpi=300)
+print("SINDy analysis complete. Final graphs saved to results/figures/.")
+plt.show()

@@ -1,0 +1,52 @@
+import numpy as np
+import pysindy as ps
+import scipy.io as sio
+import matplotlib.pyplot as plt
+import os
+
+print("--- GENERATING APPENDIX D2: PRE-STRAIN REMOVAL ---")
+
+# 1. Load Data
+data_path = os.path.join(os.path.dirname(__file__), '..', 'models', 'TFLSR_Synthetic_Data.mat')
+mat_base = sio.loadmat(data_path, squeeze_me=True)
+t = mat_base['time_data']
+dt = t[1] - t[0]
+
+if mat_base['translation_data'].shape[0] == 3:
+    z_raw = mat_base['translation_data'][2, :] 
+else:
+    z_raw = mat_base['translation_data'][:, 2]
+
+v_raw = np.gradient(z_raw, dt)
+a_raw = np.gradient(v_raw, dt)
+
+# 2. Remove the static gravitational sag (Pre-Strain)
+z_centered = z_raw - np.mean(z_raw)
+X_centered = np.stack((z_centered, v_raw), axis=-1)
+
+# 3. Fit Standard SINDy on the centered data
+poly_lib = ps.PolynomialLibrary(degree=3)
+model_centered = ps.SINDy(feature_library=poly_lib)
+model_centered.fit(X_centered, t=dt)
+
+# Predict acceleration
+a_pred_centered = model_centered.predict(X_centered)[:, 1]
+
+# 4. Plotting and Exporting
+plt.figure(figsize=(10, 5))
+plt.plot(t, a_raw, color='#00A6A6', linewidth=1.5, label="True Simscape Acceleration")
+plt.plot(t, a_pred_centered, 'w--', linewidth=2, label="SINDy Prediction (Pre-Strain Removed)")
+plt.style.use('dark_background')
+plt.xlabel("Time (s)")
+plt.ylabel("Acceleration")
+plt.title("Appendix D2: Persistence of the SINDy Stiffness Limit After Pre-Strain Removal")
+plt.legend(loc="lower right")
+plt.grid(True, alpha=0.3)
+
+# Export
+output_dir = os.path.join(os.path.dirname(__file__), '..', 'results', 'figures')
+os.makedirs(output_dir, exist_ok=True)
+plt.savefig(os.path.join(output_dir, 'Appendix_D2_PreStrain.pdf'), format='pdf', bbox_inches='tight')
+plt.savefig(os.path.join(output_dir, 'Appendix_D2_PreStrain.png'), dpi=300, bbox_inches='tight')
+
+print(f"Appendix D2 successfully exported to: {os.path.abspath(output_dir)}")
