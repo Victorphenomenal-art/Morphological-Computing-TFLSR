@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software or simulation framework, please cite it as below."
+authors:
+- family-names: "Victor"
+given-names: "Anih Chibueze"
+email: "victor.anih.251139@unn.edu.ng"
+affiliation: "University of Nigeria, Nsukka"
+title: "Morphological-Computing-TFLSR: Analytical and Simscape Framework"
+version: 1.0.0
+date-released: 2026-06-01
+url: "https://github.com/Victorphenomenal-art/Morphological-Computing-TFLSR"
